@@ -5,11 +5,15 @@ import { CharacterModel } from "../models/character.model";
 import { WorldRuleModel } from "../models/worldRule.model";
 import { EventModel } from "../models/event.model";
 import { StorylineNodeModel } from "../models/storylineNode.model";
-import {
-  incrementProjectVersionAndLogChanges,
-  markAffectedStorylineNodes,
-} from "../services/versioningService";
+import { incrementProjectVersionAndLogChanges, markAffectedStorylineNodes } from "../services/versioningService";
 import { EntityType } from "../models/dbChangeLog.model";
+import {
+  buildBridgerPayloadForEvents,
+  buildBridgerPayloadForNode,
+  buildValidatorPayload,
+} from "../services/contextRouterService";
+import { callBridger } from "../agents/bridgerClient";
+import { callValidator } from "../agents/validatorClient";
 
 export const router = express.Router();
 
@@ -220,6 +224,107 @@ router.get(
     }
     const nodes = await StorylineNodeModel.find(query).lean().exec();
     res.json(nodes);
+  })
+);
+
+// AGENTS: BRIDGER & VALIDATOR
+
+router.post(
+  "/projects/:projectId/bridger",
+  asyncHandler(async (req, res) => {
+    const projectId = req.params.projectId as string;
+    const { characterId, startEventId, endEventId, nodeId } = req.body as {
+      characterId?: string;
+      startEventId?: string;
+      endEventId?: string;
+      nodeId?: string;
+    };
+
+    if (!nodeId && (!characterId || !startEventId || !endEventId)) {
+      res.status(400).json({
+        error: "Either nodeId or (characterId, startEventId, endEventId) must be provided.",
+      });
+      return;
+    }
+
+    const payload = nodeId
+      ? await buildBridgerPayloadForNode({ projectId, nodeId })
+      : await buildBridgerPayloadForEvents({
+          projectId,
+          characterId: characterId as string,
+          startEventId: startEventId as string,
+          endEventId: endEventId as string,
+        });
+
+    const result = await callBridger(payload);
+    res.json(result);
+  })
+);
+
+router.post(
+  "/projects/:projectId/validator",
+  asyncHandler(async (req, res) => {
+    const projectId = req.params.projectId as string;
+    const body = req.body as {
+      characterId?: string;
+      worldRuleIds?: string[];
+      textToVerify?: string;
+      nodeId?: string;
+    };
+    const { characterId, textToVerify, nodeId } = body;
+
+    if (!characterId) {
+      res.status(400).json({ error: "characterId is required" });
+      return;
+    }
+
+    let text = textToVerify;
+    if (!text && nodeId) {
+      const node = await StorylineNodeModel.findOne({ projectId, nodeId }).lean().exec();
+      if (!node) {
+        res.sendStatus(404);
+        return;
+      }
+      text = node.content;
+    }
+
+    if (!text) {
+      res.status(400).json({ error: "textToVerify or nodeId must be provided" });
+      return;
+    }
+
+    const payload = await buildValidatorPayload(
+      body.worldRuleIds
+        ? {
+            projectId,
+            characterId,
+            textToVerify: text,
+            worldRuleIds: body.worldRuleIds,
+          }
+        : {
+            projectId,
+            characterId,
+            textToVerify: text,
+          }
+    );
+
+    const result = await callValidator(payload);
+
+    if (nodeId) {
+      await StorylineNodeModel.findOneAndUpdate(
+        { projectId, nodeId },
+        {
+          status: result.pass ? "stable" : "needs_revision",
+          lastCheckResult: {
+            pass: result.pass,
+            violations: result.violations,
+            checkedAt: new Date(),
+          },
+        }
+      ).exec();
+    }
+
+    res.json(result);
   })
 );
 

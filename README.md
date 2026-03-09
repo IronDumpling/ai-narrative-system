@@ -5,7 +5,7 @@
 - **Project / Context DB / Storyline** 三层模型
 - **本地 JSON 存储**：无需 MongoDB，数据存于 `backend/data/`，便于查看与调试
 - **版本管理**：设计保留，后续实现
-- **Context Router + Agents (Bridger / Validator)**：构造给 LLM 的 JSON payload（当前为 mock）
+- **Context Router + Agents (Bridger / Validator)**：构造给 LLM 的 JSON payload，接入 OpenAI GPT-4o-mini
 - **API + 测试体系**：REST 接口 + Jest 单元/集成测试
 
 ---
@@ -16,7 +16,7 @@
   - `src/config/`：环境变量
   - `src/storage/`：本地 JSON 存储层（`jsonStore.ts`、`types.ts`）
   - `src/services/`：业务服务（Context Router 等）
-  - `src/agents/`：Bridger / Validator 的 LLM 调用适配层（目前为 mock）
+  - `src/agents/`：Bridger / Validator 的 LLM 调用适配层（OpenAI API）
   - `src/routes/engineRoutes.ts`：所有 `/api` 路由
   - `src/app.ts`：Express 应用构建
   - `src/server.ts`：HTTP server 启动入口
@@ -55,13 +55,17 @@ cd backend
 npm install
 ```
 
-### 2. 配置环境变量（可选）
+### 2. 配置环境变量
 
-在 `backend/` 目录下新建 `.env`（已在 `.gitignore` 中忽略）：
+在 `backend/` 目录下新建 `.env`（参考 `backend/.env.example`，已在 `.gitignore` 中忽略）：
 
 ```bash
 PORT=4000
+OPENAI_API_KEY=sk-your-key-here
 ```
+
+- **PORT**：服务端口，默认 4000
+- **OPENAI_API_KEY**：OpenAI API 密钥，用于 Bridger 与 Validator 的 LLM 调用。若未配置，将使用 mock 实现（固定返回），便于本地测试与 CI
 
 ### 3. 启动开发服务器
 
@@ -151,7 +155,7 @@ Body 示例：
   ```
 - `PUT /projects/:projectId/storyline-nodes/:nodeId`
 
-### 4. Agents：Bridger & Validator（目前为 mock）
+### 4. Agents：Bridger & Validator
 
 #### Bridger（生成桥接/补全文本）
 
@@ -174,16 +178,18 @@ Body 两种用法：
    }
   ```
 
-返回（mock 示例）：
+返回：
 
 ```json
 {
   "bridging_steps": [
-    { "step": 1, "action": "Character evaluates the situation and prepares to act." },
-    { "step": 2, "action": "Character moves toward the next anchor event with clear intent." }
+    { "step": 1, "action": "..." },
+    { "step": 2, "action": "..." }
   ]
 }
 ```
+
+若传 `nodeId` 且 `bridging_steps` 非空，会将生成内容写回对应 StorylineNode 的 `content`，并设置 `status: "draft"`。
 
 #### Validator（验证 OOC / 规则违背）
 
@@ -205,12 +211,12 @@ Body：
 
 行为：
 
-- 构造 `ValidatorPayload`，调用 `callValidator`（当前 mock 总是 `pass: true`）
+- 构造 `ValidatorPayload`，调用 `callValidator`（接入 OpenAI，或未配置 API Key 时使用 mock）
 - 若携带 `nodeId`：更新该 StorylineNode：
   - `status = "stable"` 或 `needs_revision`
   - `lastCheckResult = { pass, violations, checkedAt }`
 
-返回（mock 示例）：
+返回：
 
 ```json
 {
@@ -301,5 +307,5 @@ npm run test:integration -- --runTestsByPath tests/integration/versioning-flow.t
 3. **运行测试**：
   - `npm run test:unit` 验证服务层逻辑  
   - `npm run test:integration` 验证端到端行为
-4. **迭代开发**：在此基础上接入真实 LLM（替换 `bridgerClient` / `validatorClient` 的 mock），或增加前端控制台。
+4. **迭代开发**：Bridger / Validator 已接入 OpenAI，配置 `OPENAI_API_KEY` 即可使用真实 LLM；或增加前端控制台。
 

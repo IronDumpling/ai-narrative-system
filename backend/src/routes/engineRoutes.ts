@@ -220,6 +220,15 @@ router.post(
         });
 
     const result = await callBridger(payload);
+
+    if (nodeId && result.bridging_steps.length > 0) {
+      const content = result.bridging_steps.map((s) => s.action).join("\n\n");
+      await store.updateStorylineNode(projectId, nodeId, {
+        content,
+        status: "draft",
+      });
+    }
+
     res.json(result);
   })
 );
